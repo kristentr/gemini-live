@@ -1,0 +1,82 @@
+from google import genai
+from google.genai import types
+
+client = genai.Client()
+
+getWeather = {
+    "name": "getWeather",
+    "description": "Gets the weather for a requested city.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "city": {
+                "type": "string",
+                "description": "The city and state, e.g. Utqiaġvik, Alaska",
+            },
+        },
+        "required": ["city"],
+    },
+}
+
+# Turn 1: Initial request with Google Search (built-in) and getWeather (custom) tools enabled
+response = client.models.generate_content(
+    model="gemini-3-flash-preview",
+    contents="What is the northernmost city in the United States? What's the weather like there today?",
+    config=types.GenerateContentConfig(
+      tools=[
+        types.Tool(
+          google_search=types.ToolGoogleSearch(),  # Built-in tool
+          function_declarations=[getWeather]       # Custom tool
+        ),
+      ],
+      include_server_side_tool_invocations=True
+    ),
+)
+
+for part in response.candidates[0].content.parts:
+    if part.tool_call:
+        print(f"Tool call: {part.tool_call.tool_type} (ID: {part.tool_call.id})")
+    if part.tool_response:
+        print(f"Tool response: {part.tool_response.tool_type} (ID: {part.tool_response.id})")
+    if part.function_call:
+        print(f"Function call: {part.function_call.name} (ID: {part.function_call.id})")
+
+# Turn 2: Manually build history to circulate both tool and function context
+history = [
+    types.Content(
+        role="user",
+        parts=[types.Part(text="What is the northernmost city in the United States? What's the weather like there today?")]
+    ),
+    # Response from Turn 1 includes tool_call, tool_response, and thought_signatures
+    response.candidates[0].content,
+    # Return the function_response
+    types.Content(
+        role="user",
+        parts=[types.Part(
+            function_response=types.FunctionResponse(
+                name="getWeather",
+                response={"response": "Very cold. 22 degrees Fahrenheit."},
+                id=response.candidates[0].content.parts[2].function_call.id # Match the ID from the function_call
+            )
+        )]
+    )
+]
+
+response_2 = client.models.generate_content(
+    model="gemini-3-flash-preview",
+    contents=history,
+    config=types.GenerateContentConfig(
+      tools=[
+        types.Tool(
+          google_search=types.ToolGoogleSearch(),
+          function_declarations=[getWeather]
+        ),
+      ],
+      # This flag needs to be enabled for built-in tool context circulation and tool combination
+      include_server_side_tool_invocations=True
+    ),
+)
+
+for part in response_2.candidates[0].content.parts:
+    if part.text:
+        print(part.text)
